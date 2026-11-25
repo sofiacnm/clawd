@@ -109,7 +109,6 @@ function QuartersScene({ onPick }) {
             aria-label={h.id}
           >
             <span className="hotspot-glow" />
-            <img className="hotspot-item" src={ACCESSORY_IMAGES[h.id]} alt="" draggable={false} />
           </button>
         ))}
       </div>
