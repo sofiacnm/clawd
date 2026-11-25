@@ -16,6 +16,7 @@ import accRope from "./assets/accessories/rope.png";
 import accGlasses from "./assets/accessories/glasses.png";
 import accShades from "./assets/accessories/shades.png";
 import { useTypewriter, DialogueBox, InputBox, ChoiceBox, RainOverlay } from "./ui";
+import { logResponse } from "./sheets";
 
 const ACCESSORY_IMAGES = {
   conductor: accConductor,
@@ -261,14 +262,26 @@ function ClassroomScene({ onDone }) {
   if (current.type === "dialogue") {
     overlay = <DialogueBox key={beat} text={current.text} onAdvance={advance} />;
   } else if (current.type === "input") {
-    overlay = <InputBox key={beat} placeholder={current.placeholder} onSubmit={advance} />;
+    overlay = (
+      <InputBox
+        key={beat}
+        placeholder={current.placeholder}
+        onSubmit={(value) => {
+          logResponse("classroom_learned", value);
+          advance();
+        }}
+      />
+    );
   } else if (current.type === "quiz") {
     overlay = (
       <ChoiceBox
         key={beat}
         prompt={current.prompt}
         options={current.options}
-        onSubmit={onDone}
+        onSubmit={(i) => {
+          logResponse("classroom_quiz", current.options[i]);
+          onDone();
+        }}
       />
     );
   }

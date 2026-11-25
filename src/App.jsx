@@ -9,6 +9,7 @@ import clawdPoint from "./assets/clawd-point.webp";
 import clawdShrug from "./assets/clawd-shrug.webp";
 import { useTypewriter, DialogueBox, InputBox, ChoiceBox, YesNoBox, RainOverlay } from "./ui";
 import Journey from "./Journey";
+import { logResponse } from "./sheets";
 
 const SCENES = {
   platform: platformBg,
@@ -217,9 +218,14 @@ function WorldScreen({ onRestart, onFinishTrain }) {
       <InputBox
         key={cur}
         placeholder={step.placeholder}
-        onSubmit={() => {
-          if (cur === IDX.GUESS_INPUT) goTo(IDX.THANK_YOU_1);
-          else if (cur === IDX.OTHER_INPUT) goTo(IDX.THANK_YOU_2);
+        onSubmit={(value) => {
+          if (cur === IDX.GUESS_INPUT) {
+            logResponse("guess", value);
+            goTo(IDX.THANK_YOU_1);
+          } else if (cur === IDX.OTHER_INPUT) {
+            logResponse("other_topic", value);
+            goTo(IDX.THANK_YOU_2);
+          }
         }}
       />
     );
@@ -231,7 +237,10 @@ function WorldScreen({ onRestart, onFinishTrain }) {
         options={step.options}
         onSubmit={(i) => {
           if (i === OTHER_OPTION_INDEX) goTo(IDX.OTHER_INPUT);
-          else goTo(IDX.THANK_YOU_2);
+          else {
+            logResponse("topic", step.options[i]);
+            goTo(IDX.THANK_YOU_2);
+          }
         }}
       />
     );
