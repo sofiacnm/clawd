@@ -1,461 +1,311 @@
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ticketImage from "./assets/vip-ticket.png";
-import platformImage from "./assets/train-platform.png";
 import boardingImage from "./assets/train-boarding.png";
-import quartersImage from "./assets/private-quarters.png";
-import interiorImage from "./assets/train-interior.png";
+import platformBg from "./assets/scene-platform.webp";
+import trainBg from "./assets/scene-train.webp";
+import quartersBg from "./assets/scene-quarters.webp";
+import clawdNeutral from "./assets/clawd-neutral.webp";
+import clawdPoint from "./assets/clawd-point.webp";
+import clawdShrug from "./assets/clawd-shrug.webp";
+import { useTypewriter, DialogueBox, InputBox, ChoiceBox, YesNoBox, RainOverlay } from "./ui";
+import Journey from "./Journey";
 
-const scenes = ["INVITE", "PLATFORM", "ON BOARD", "QUARTERS"];
+const SCENES = {
+  platform: platformBg,
+  train: trainBg,
+  quarters: quartersBg,
+};
 
-const colorChoices = [
-  { name: "Signal orange", value: "#f05a24" },
-  { name: "Electric blue", value: "#2878d0" },
-  { name: "Acid green", value: "#8cac37" },
-  { name: "Hot pink", value: "#d74d82" },
-  { name: "Royal purple", value: "#764caa" },
-  { name: "Silver", value: "#a9ada8" },
+const CHAR_POSES = {
+  neutral: clawdNeutral,
+  point: clawdPoint,
+  shrug: clawdShrug,
+};
+
+const CHAR_ANCHOR = {
+  platform: { x: 58, y: 87 },
+  train: { x: 62, y: 90 },
+  quarters: null,
+};
+
+// Platform is a wide establishing shot (Clawd reads smaller, further away);
+// train interior is a closer shot.
+const CHAR_SCALE = {
+  platform: 24,
+  train: 48,
+};
+
+const OTHER_OPTION_INDEX = 3;
+
+const steps = [
+  { type: "dialogue", scene: "platform", char: "point", text: "You've arrived just in time." },
+  { type: "portrait", image: boardingImage, text: "The name is Clawd, welcome." },
+  { type: "dialogue", scene: "train", char: "point", text: "I am taking you inside the black box of AI.", transition: true },
+  { type: "dialogue", scene: "train", char: "shrug", text: "If you could guess, what do you think is inside the black box?" },
+  { type: "input", scene: "train", char: "neutral", placeholder: "Type your guess..." },
+  { type: "dialogue", scene: "train", char: "point", text: "Thank you!" },
+  {
+    type: "choice",
+    scene: "train",
+    char: "neutral",
+    prompt: "From this list what do you want to know?",
+    options: ["What are tokens", "Mathematical matrixes", "AI safety", "Other"],
+  },
+  { type: "input", scene: "train", char: "neutral", placeholder: "What would you like to know?" },
+  { type: "dialogue", scene: "train", char: "point", text: "Thank you!" },
+  { type: "yesno", scene: "train", char: "shrug", text: "Before we arrive may I show you where you could change?" },
 ];
 
-const avatarChoices = [
-  { id: "square", label: "Scout", face: "•  •" },
-  { id: "bold", label: "Spark", face: "■  ■" },
-  { id: "happy", label: "Ace", face: "^  ^" },
-  { id: "cool", label: "Nova", face: "▬  ▬" },
-];
+const IDX = {
+  GUESS_INPUT: 4,
+  THANK_YOU_1: 5,
+  CHOICE: 6,
+  OTHER_INPUT: 7,
+  THANK_YOU_2: 8,
+  YESNO: 9,
+};
 
-const accessories = [
-  { id: "none", label: "No hat" },
-  { id: "cowboy", label: "Cowboy" },
-  { id: "conductor", label: "Conductor" },
-  { id: "crown", label: "Crown" },
-];
+function PannableScene({ sceneName, charPose }) {
+  const viewportRef = useRef(null);
+  const layerRef = useRef(null);
+  const bgRef = useRef(null);
+  const panRef = useRef(0);
+  const minPanRef = useRef(0);
+  const dragRef = useRef(null);
+  const [hintVisible, setHintVisible] = useState(true);
+  const anchor = CHAR_ANCHOR[sceneName];
 
-function PixelClawd({
-  color = "#f05a24",
-  accessory = "conductor",
-  avatar = "square",
-  size = "medium",
-}) {
-  const selectedAvatar =
-    avatarChoices.find((choice) => choice.id === avatar) ?? avatarChoices[0];
+  const applyTransform = () => {
+    if (layerRef.current) {
+      layerRef.current.style.transform = `translate(${panRef.current}px,-50%)`;
+    }
+  };
+
+  const clampPan = () => {
+    const vp = viewportRef.current;
+    const bg = bgRef.current;
+    if (!vp || !bg || !bg.offsetWidth) return;
+    minPanRef.current = Math.min(0, vp.clientWidth - bg.offsetWidth);
+    panRef.current = Math.min(0, Math.max(minPanRef.current, panRef.current));
+    applyTransform();
+  };
+
+  // Rests the camera facing whatever Clawd is standing in front of, rather
+  // than always starting at the image's left edge — dragging still reveals
+  // the rest of the panorama either direction.
+  const centerOnAnchor = () => {
+    const vp = viewportRef.current;
+    const bg = bgRef.current;
+    if (!vp || !bg || !bg.offsetWidth) return;
+    const vw = vp.clientWidth;
+    const bw = bg.offsetWidth;
+    minPanRef.current = Math.min(0, vw - bw);
+    const target = anchor ? vw / 2 - (anchor.x / 100) * bw : (vw - bw) / 2;
+    panRef.current = Math.min(0, Math.max(minPanRef.current, target));
+    applyTransform();
+  };
+
+  useEffect(() => {
+    panRef.current = 0;
+    centerOnAnchor();
+    window.addEventListener("resize", clampPan);
+    return () => window.removeEventListener("resize", clampPan);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneName]);
+
+  const onPointerDown = (e) => {
+    dragRef.current = { startX: e.clientX, startPan: panRef.current };
+    viewportRef.current.setPointerCapture(e.pointerId);
+    setHintVisible(false);
+  };
+  const onPointerMove = (e) => {
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    panRef.current = Math.min(0, Math.max(minPanRef.current, dragRef.current.startPan + dx));
+    applyTransform();
+  };
+  const endDrag = () => {
+    dragRef.current = null;
+  };
 
   return (
     <div
-      className={`pixel-clawd pixel-clawd--${size}`}
-      style={{ "--clawd-color": color }}
-      aria-label={`${colorChoices.find((choice) => choice.value === color)?.name ?? "Custom"} Clawd wearing ${accessory}`}
-      role="img"
+      className="scene-viewport"
+      ref={viewportRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
     >
-      {accessory !== "none" && (
-        <div className={`clawd-hat clawd-hat--${accessory}`} />
-      )}
-      <div className="clawd-body">
-        <span className="clawd-face">{selectedAvatar.face}</span>
-        <span className="clawd-mouth" />
-        <span className="clawd-arm clawd-arm--left" />
-        <span className="clawd-arm clawd-arm--right" />
-        <span className="clawd-leg clawd-leg--left" />
-        <span className="clawd-leg clawd-leg--right" />
-      </div>
-    </div>
-  );
-}
-
-function GameHeader({ scene, onRestart }) {
-  return (
-    <header className="game-header">
-      <button
-        className="wordmark"
-        type="button"
-        onClick={onRestart}
-        aria-label="Restart The Black Box"
-      >
-        <span>THE</span> BLACK BOX
-      </button>
-      <div className="journey" aria-label={`Scene ${scene + 1} of 4`}>
-        <span className="journey-count">0{scene + 1}/04</span>
-        <div className="journey-track">
-          <span style={{ width: `${((scene + 1) / 4) * 100}%` }} />
-        </div>
-      </div>
-      <span className="scene-name">{scenes[scene]}</span>
-    </header>
-  );
-}
-
-function PixelButton({ children, secondary = false, ...props }) {
-  return (
-    <button
-      className={`pixel-button${secondary ? " pixel-button--secondary" : ""}`}
-      type="button"
-      {...props}
-    >
-      {children}
-    </button>
-  );
-}
-
-function TicketScene({ onAccept }) {
-  return (
-    <section className="scene ticket-scene" aria-labelledby="ticket-title">
-      <div className="ticket-copy">
-        <p className="kicker">A ONE-NIGHT EXPERIENCE</p>
-        <h1 id="ticket-title">YOUR VIP PASS HAS ARRIVED.</h1>
-        <p>
-          One train. One unknown destination. A private invitation to step
-          inside the questions shaping our future.
-        </p>
-      </div>
-
-      <button className="vip-ticket" type="button" onClick={onAccept}>
-        <img src={ticketImage} alt="" />
-        <span className="ticket-stamp">ADMIT ONE</span>
-        <span className="ticket-cta">ACCEPT INVITE <b>→</b></span>
-      </button>
-
-      <p className="system-note">DEPARTURE: 20:48 · PLATFORM: UNKNOWN</p>
-    </section>
-  );
-}
-
-function PlatformScene({ onBoard }) {
-  return (
-    <section
-      className="scene image-scene platform-scene"
-      aria-labelledby="platform-title"
-      style={{
-        "--scene-image": `url(${platformImage})`,
-        "--portrait-image": `url(${boardingImage})`,
-      }}
-    >
-      <div className="scene-scanlines" />
-      <div className="platform-guide">
-        <PixelClawd size="large" />
-      </div>
-      <div className="dialogue-panel">
-        <div className="speaker-tag">ORANGE CONDUCTOR</div>
-        <h1 id="platform-title">YOU MADE IT.</h1>
-        <p>
-          I am here to take you to <strong>THE BLACK BOX.</strong> Keep your
-          ticket close. The questions begin once we board.
-        </p>
-        <PixelButton onClick={onBoard}>BOARD THE TRAIN →</PixelButton>
-      </div>
-    </section>
-  );
-}
-
-function QuestionCard({
-  step,
-  eyebrow,
-  title,
-  options,
-  selected,
-  onSelect,
-  onContinue,
-  continueLabel,
-}) {
-  return (
-    <div className="question-card">
-      <div className="question-number">QUESTION 0{step}</div>
-      <p className="kicker">{eyebrow}</p>
-      <h1>{title}</h1>
-      <div className="answer-grid" role="group" aria-label={title}>
-        {options.map((option) => (
-          <button
-            className={selected === option ? "answer is-selected" : "answer"}
-            type="button"
-            key={option}
-            onClick={() => onSelect(option)}
-            aria-pressed={selected === option}
-          >
-            <span>{selected === option ? "■" : "□"}</span>
-            {option}
-          </button>
-        ))}
-      </div>
-      <PixelButton onClick={onContinue} disabled={!selected}>
-        {continueLabel} →
-      </PixelButton>
-    </div>
-  );
-}
-
-function OnboardScene({
-  questionStep,
-  setQuestionStep,
-  knowledge,
-  setKnowledge,
-  curiosity,
-  setCuriosity,
-  onContinue,
-}) {
-  const knowledgeOptions = [
-    "I use AI every day",
-    "I know the basics",
-    "I am curious but new",
-    "It still feels mysterious",
-  ];
-  const curiosityOptions = [
-    "How AI really thinks",
-    "What it means for creativity",
-    "How to build with it",
-    "What the future could become",
-  ];
-
-  return (
-    <section
-      className="scene image-scene onboard-scene"
-      style={{ "--scene-image": `url(${interiorImage})` }}
-      aria-label="Inside the train"
-    >
-      <div className="scene-scanlines" />
-      <aside className="conductor-card">
-        <PixelClawd size="medium" />
-        <span>THE CONDUCTOR IS LISTENING...</span>
-      </aside>
-      {questionStep === 1 ? (
-        <QuestionCard
-          step={1}
-          eyebrow="BEFORE WE GO FURTHER"
-          title="WHAT DO YOU KNOW ABOUT THE BLACK BOX?"
-          options={knowledgeOptions}
-          selected={knowledge}
-          onSelect={setKnowledge}
-          onContinue={() => setQuestionStep(2)}
-          continueLabel="NEXT QUESTION"
+      <div className="scene-layer" ref={layerRef}>
+        <img
+          ref={bgRef}
+          className="scene-bg"
+          src={SCENES[sceneName]}
+          alt=""
+          draggable={false}
+          onLoad={centerOnAnchor}
         />
-      ) : (
-        <QuestionCard
-          step={2}
-          eyebrow="ONE MORE FOR THE ROAD"
-          title="WHAT WOULD YOU LIKE TO KNOW ABOUT AI?"
-          options={curiosityOptions}
-          selected={curiosity}
-          onSelect={setCuriosity}
-          onContinue={onContinue}
-          continueLabel="ENTER PRIVATE QUARTERS"
-        />
-      )}
-    </section>
-  );
-}
-
-function QuartersScene({
-  avatar,
-  setAvatar,
-  color,
-  setColor,
-  accessory,
-  setAccessory,
-  knowledge,
-  curiosity,
-  onFinish,
-}) {
-  return (
-    <section
-      className="scene image-scene quarters-scene"
-      style={{ "--scene-image": `url(${quartersImage})` }}
-      aria-labelledby="quarters-title"
-    >
-      <div className="scene-scanlines" />
-      <div className="customizer">
-        <div className="customizer-heading">
-          <p className="kicker">PRIVATE QUARTERS · CAR 08</p>
-          <h1 id="quarters-title">MAKE YOUR GUIDE YOURS.</h1>
-          <p>
-            Every journey needs a look. Choose a face, switch the color, and
-            add something with character.
-          </p>
-        </div>
-
-        <div className="avatar-stage">
-          <div className="stage-label">LIVE PREVIEW</div>
-          <PixelClawd
-            color={color}
-            accessory={accessory}
-            avatar={avatar}
-            size="hero"
+        {charPose && anchor && (
+          <img
+            className="scene-char"
+            src={CHAR_POSES[charPose]}
+            alt=""
+            draggable={false}
+            style={{
+              left: `${anchor.x}%`,
+              top: `${anchor.y}%`,
+              height: `${CHAR_SCALE[sceneName] ?? 48}%`,
+            }}
           />
-          <div className="avatar-shadow" />
-        </div>
-
-        <div className="customizer-controls">
-          <fieldset>
-            <legend>01 · CHOOSE AVATAR</legend>
-            <div className="avatar-options">
-              {avatarChoices.map((choice) => (
-                <button
-                  type="button"
-                  className={avatar === choice.id ? "mini-face is-selected" : "mini-face"}
-                  onClick={() => setAvatar(choice.id)}
-                  key={choice.id}
-                  aria-pressed={avatar === choice.id}
-                >
-                  <span>{choice.face}</span>
-                  {choice.label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>02 · PICK A COLOR</legend>
-            <div className="swatches">
-              {colorChoices.map((choice) => (
-                <button
-                  type="button"
-                  className={color === choice.value ? "swatch is-selected" : "swatch"}
-                  onClick={() => setColor(choice.value)}
-                  key={choice.value}
-                  style={{ "--swatch": choice.value }}
-                  aria-label={choice.name}
-                  aria-pressed={color === choice.value}
-                />
-              ))}
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>03 · ADD APPAREL</legend>
-            <div className="accessory-options">
-              {accessories.map((item) => (
-                <button
-                  type="button"
-                  className={accessory === item.id ? "choice-chip is-selected" : "choice-chip"}
-                  onClick={() => setAccessory(item.id)}
-                  key={item.id}
-                  aria-pressed={accessory === item.id}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
-
-          <PixelButton onClick={onFinish}>LOCK IN MY LOOK →</PixelButton>
-        </div>
+        )}
       </div>
+      {hintVisible && <div className="drag-hint">&#8596; DRAG TO LOOK AROUND</div>}
+    </div>
+  );
+}
 
-      <div className="journey-receipt">
-        <span>YOUR ROUTE</span>
-        <p>{knowledge || "THE UNKNOWN"}</p>
-        <i>↓</i>
-        <p>{curiosity || "THE BLACK BOX"}</p>
-      </div>
+function InviteScreen({ onStart }) {
+  return (
+    <section className="screen invite-screen">
+      <RainOverlay />
+      <img className="ticket-art" src={ticketImage} alt="VIP ticket" />
+      <h1 className="title">
+        You've been
+        <br />
+        invited
+      </h1>
+      <p className="subtitle">Step inside the black box of AI to learn more</p>
+      <button className="btn-start" onClick={onStart}>Start Quest</button>
     </section>
   );
 }
 
-function CompletionModal({ color, accessory, avatar, onReplay }) {
+function WorldScreen({ onRestart, onFinishTrain }) {
+  const [cur, setCur] = useState(0);
+  const [fading, setFading] = useState(false);
+  const step = steps[cur];
+
+  const goTo = (i) => {
+    if (steps[i].transition) {
+      setFading(true);
+      setTimeout(() => {
+        setCur(i);
+        setTimeout(() => setFading(false), 60);
+      }, 350);
+    } else {
+      setCur(i);
+    }
+  };
+  const advance = () => goTo(cur + 1);
+
+  let overlay = null;
+  if (step.type === "dialogue") {
+    overlay = (
+      <DialogueBox
+        key={cur}
+        text={step.text}
+        onAdvance={() => {
+          if (cur === IDX.THANK_YOU_1) goTo(IDX.CHOICE);
+          else if (cur === IDX.THANK_YOU_2) goTo(IDX.YESNO);
+          else advance();
+        }}
+      />
+    );
+  } else if (step.type === "input") {
+    overlay = (
+      <InputBox
+        key={cur}
+        placeholder={step.placeholder}
+        onSubmit={() => {
+          if (cur === IDX.GUESS_INPUT) goTo(IDX.THANK_YOU_1);
+          else if (cur === IDX.OTHER_INPUT) goTo(IDX.THANK_YOU_2);
+        }}
+      />
+    );
+  } else if (step.type === "choice") {
+    overlay = (
+      <ChoiceBox
+        key={cur}
+        prompt={step.prompt}
+        options={step.options}
+        onSubmit={(i) => {
+          if (i === OTHER_OPTION_INDEX) goTo(IDX.OTHER_INPUT);
+          else goTo(IDX.THANK_YOU_2);
+        }}
+      />
+    );
+  } else if (step.type === "yesno") {
+    overlay = (
+      <YesNoBox
+        key={cur}
+        text={step.text}
+        onYes={() => onFinishTrain(false)}
+        onNo={() => onFinishTrain(true)}
+      />
+    );
+  }
+
   return (
-    <div className="completion-backdrop" role="dialog" aria-modal="true">
-      <div className="completion-modal">
-        <p className="kicker">IDENTITY CONFIRMED</p>
-        <PixelClawd
-          color={color}
-          accessory={accessory}
-          avatar={avatar}
-          size="large"
-        />
-        <h2>THE BLACK BOX IS READY FOR YOU.</h2>
-        <p>
-          Your guide has the look. Your questions are on board. The next stop
-          is where the real conversation begins.
-        </p>
-        <PixelButton onClick={onReplay}>PLAY AGAIN</PixelButton>
+    <section className="screen world-screen">
+      {step.type === "portrait" ? (
+        <PortraitBeat key={cur} image={step.image} text={step.text} onAdvance={advance} />
+      ) : (
+        <>
+          <PannableScene sceneName={step.scene} charPose={step.char} />
+          <div className={`fade-curtain${fading ? " show" : ""}`} />
+          <div className="ui-layer">{overlay}</div>
+        </>
+      )}
+      <button className="restart-link" onClick={onRestart}>RESTART</button>
+    </section>
+  );
+}
+
+function PortraitBeat({ image, text, onAdvance }) {
+  const [display, done, skip] = useTypewriter(text);
+  return (
+    <div
+      className="portrait-beat"
+      style={{ backgroundImage: `url(${image})` }}
+      onClick={() => (done ? onAdvance() : skip())}
+    >
+      <div className="ui-layer">
+        <div className="box dialogue-box">
+          <p>{display}</p>
+          <div className="advance-indicator">&#9660;</div>
+        </div>
       </div>
     </div>
   );
 }
 
 function App() {
-  const [scene, setScene] = useState(0);
-  const [questionStep, setQuestionStep] = useState(1);
-  const [knowledge, setKnowledge] = useState("");
-  const [curiosity, setCuriosity] = useState("");
-  const [avatar, setAvatar] = useState("square");
-  const [color, setColor] = useState("#f05a24");
-  const [accessory, setAccessory] = useState("conductor");
-  const [complete, setComplete] = useState(false);
-
-  const sceneContent = useMemo(() => {
-    if (scene === 0) {
-      return <TicketScene onAccept={() => setScene(1)} />;
-    }
-
-    if (scene === 1) {
-      return <PlatformScene onBoard={() => setScene(2)} />;
-    }
-
-    if (scene === 2) {
-      return (
-        <OnboardScene
-          questionStep={questionStep}
-          setQuestionStep={setQuestionStep}
-          knowledge={knowledge}
-          setKnowledge={setKnowledge}
-          curiosity={curiosity}
-          setCuriosity={setCuriosity}
-          onContinue={() => setScene(3)}
-        />
-      );
-    }
-
-    return (
-      <QuartersScene
-        avatar={avatar}
-        setAvatar={setAvatar}
-        color={color}
-        setColor={setColor}
-        accessory={accessory}
-        setAccessory={setAccessory}
-        knowledge={knowledge}
-        curiosity={curiosity}
-        onFinish={() => setComplete(true)}
-      />
-    );
-  }, [
-    scene,
-    questionStep,
-    knowledge,
-    curiosity,
-    avatar,
-    color,
-    accessory,
-  ]);
+  const [phase, setPhase] = useState("invite");
+  const [key, setKey] = useState(0);
+  const [skipCustomization, setSkipCustomization] = useState(false);
 
   const restart = () => {
-    setScene(0);
-    setQuestionStep(1);
-    setKnowledge("");
-    setCuriosity("");
-    setAvatar("square");
-    setColor("#f05a24");
-    setAccessory("conductor");
-    setComplete(false);
+    setPhase("invite");
+    setKey((k) => k + 1);
   };
 
-  return (
-    <main className="game-shell">
-      <GameHeader scene={scene} onRestart={restart} />
-      <div className="game-viewport" aria-live="polite">
-        {sceneContent}
-      </div>
-      <footer className="game-footer">
-        <span>CLAWD RAIL · NIGHT SERVICE</span>
-        <span>USE TOUCH OR MOUSE TO PLAY</span>
-      </footer>
-      {complete && (
-        <CompletionModal
-          color={color}
-          accessory={accessory}
-          avatar={avatar}
-          onReplay={restart}
-        />
-      )}
-    </main>
-  );
+  if (phase === "invite") {
+    return <InviteScreen onStart={() => setPhase("train")} />;
+  }
+  if (phase === "train") {
+    return (
+      <WorldScreen
+        key={key}
+        onRestart={restart}
+        onFinishTrain={(skip) => {
+          setSkipCustomization(skip);
+          setPhase("journey");
+        }}
+      />
+    );
+  }
+  return <Journey key={key} skipCustomization={skipCustomization} onRestart={restart} />;
 }
 
 export default App;
